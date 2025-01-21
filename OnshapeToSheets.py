@@ -6,6 +6,8 @@ from urllib.parse import urlparse
 import requests
 import json
 import pandas
+import gspread
+from oauth2client.service_account import ServiceAccountCredentials
 
 # Replace with your Onshape API credentials
 ACCESS_KEY = "yRdKtl15ro3N8A9ChtJAq6Nd"
@@ -84,7 +86,25 @@ def get_dataframe():
     df = pandas.read_json("filtered_bom.json")
     cols = ['name', 'description', 'vendor', 'partNumber', 'material', 'quantity', 'revision', 'manufacturingmethod']
     print(df.loc[:, cols])
-    df.loc[:, cols].to_csv("bom.csv")
+    return df.loc[:, cols]
+
+def append_to_google_sheet(df, sheet_name, worksheet_name):
+    # Define the scope
+    scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+
+    # Add credentials to the account
+    creds = ServiceAccountCredentials.from_json_keyfile_name("path/to/your/credentials.json", scope)
+
+    # Authorize the clientsheet 
+    client = gspread.authorize(creds)
+
+    # Get the sheet
+    sheet = client.open(sheet_name)
+    worksheet = sheet.worksheet(worksheet_name)
+
+    # Append each row of the DataFrame to the Google Sheet
+    for index, row in df.iterrows():
+        worksheet.append_row(row.values.tolist())
 
 def main():
     bom_data = fetch_bom()
