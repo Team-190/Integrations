@@ -5,6 +5,7 @@ import base64
 from urllib.parse import urlparse
 import requests
 import json
+import pandas
 
 # Replace with your Onshape API credentials
 ACCESS_KEY = "yRdKtl15ro3N8A9ChtJAq6Nd"
@@ -64,6 +65,10 @@ def parse_json(file_path):
 
         filtered_data = [datum for datum in data['bomTable']['items'] if datum.get('partNumber')]
 
+        for item in filtered_data:
+            if "material" in item and "id" in item["material"]:
+                item["material"] = item["material"]["id"]
+
         if filtered_data:
             save_to_json(filtered_data, "filtered_bom.json")
             print("Filtered BOM saved to filtered_bom.json")
@@ -75,12 +80,18 @@ def parse_json(file_path):
     except json.JSONDecodeError:
         print("Invalid JSON file.")
 
+def get_dataframe():
+    df = pandas.read_json("filtered_bom.json")
+    cols = ['name', 'description', 'vendor', 'partNumber', 'material', 'quantity', 'revision', 'manufacturingmethod']
+    print(df.loc[:, cols])
+    df.loc[:, cols].to_csv("bom.csv")
+
 def main():
     bom_data = fetch_bom()
     if bom_data:
         save_to_json(bom_data)
     parse_json("bom.json")
-
+    get_dataframe()
     exit()
 
 if __name__ == "__main__":
