@@ -88,19 +88,19 @@ def get_dataframe():
     print(df.loc[:, cols])
     return df.loc[:, cols]
 
-def append_to_google_sheet(df, sheet_name, worksheet_name):
+def append_to_google_sheet(df):
     # Define the scope
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
 
     # Add credentials to the account
-    creds = ServiceAccountCredentials.from_json_keyfile_name("path/to/your/credentials.json", scope)
+    creds = ServiceAccountCredentials.from_json_keyfile_name("onshapetoairtable-96db54087293.json", scope)
 
     # Authorize the clientsheet 
     client = gspread.authorize(creds)
 
     # Get the sheet
-    sheet = client.open(sheet_name)
-    worksheet = sheet.worksheet(worksheet_name)
+    sheet = client.open("2025GammaBOM")
+    worksheet = sheet.worksheet("Sheet1")
 
     # Append each row of the DataFrame to the Google Sheet
     for index, row in df.iterrows():
@@ -111,7 +111,8 @@ def main():
     if bom_data:
         save_to_json(bom_data)
     parse_json("bom.json")
-    get_dataframe()
+    df = get_dataframe()
+    append_to_google_sheet(df)
     exit()
 
 if __name__ == "__main__":
