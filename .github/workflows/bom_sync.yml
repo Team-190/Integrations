@@ -1,0 +1,41 @@
+name: Sync Onshape BOM to Google Sheets
+
+on:
+  workflow_dispatch: {}
+  schedule:
+    - cron: "*/15 * * * *" # 15 mins Update
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run BOM sync
+        env:
+          ONSHAPE_ACCESS_KEY: ${{ secrets.ONSHAPE_ACCESS_KEY }}
+          ONSHAPE_SECRET_KEY: ${{ secrets.ONSHAPE_SECRET_KEY }}
+          ONSHAPE_BASE_URL: ${{ secrets.ONSHAPE_BASE_URL }}
+          ONSHAPE_DOCUMENT_ID: ${{ secrets.ONSHAPE_DOCUMENT_ID }}
+          ONSHAPE_WORKSPACE_ID: ${{ secrets.ONSHAPE_WORKSPACE_ID }}
+          ONSHAPE_ASSEMBLY_ID: ${{ secrets.ONSHAPE_ASSEMBLY_ID }}
+
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          GOOGLE_SHEET_NAME: "2026GammaBOM"
+          GOOGLE_WORKSHEET_NAME: "Sheet1"
+
+        run: |
+          python OnshapeToSheets2026Gamma.py
