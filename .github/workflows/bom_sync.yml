@@ -2,8 +2,10 @@ name: Sync Onshape BOM to Google Sheets
 
 on:
   workflow_dispatch: {}
+  repository_dispatch:
+    types: [bom_sync_gamma]
   schedule:
-    - cron: "* * * * *"
+    - cron: "*/15 * * * *" # Schedule every 15 mins
 
 jobs:
   sync:
@@ -26,21 +28,14 @@ jobs:
 
       - name: Run BOM sync
         env:
-          # Onshape (new script expects the full doc URL)
           ONSHAPE_ACCESS_KEY: ${{ secrets.ONSHAPE_ACCESS_KEY }}
           ONSHAPE_SECRET_KEY: ${{ secrets.ONSHAPE_SECRET_KEY }}
           ONSHAPE_DOC_URL: ${{ secrets.ONSHAPE_DOC_URL_GAMMA }}
 
-          # Google (Actions uses JSON secret, not a file)
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
           GOOGLE_SHEET_NAME: "2026GammaBOM"
           GOOGLE_WORKSHEET_NAME: "Sheet1"
 
-          # Filter: include team parts + INSERT VENDOR PARTS
           PARTNUMBER_PREFIXES: "P-190A-26,WCP-,TTB-,SDS"
-
-          # Optional: if you want to override columns from defaults
-          # INCLUDE_COLUMNS: "item,quantity,partNumber,name,description,material,manufacturingmethod,vendor,frcbombommaterial,frcbompreprocess,frcbomprocess1,frcbomprocess2"
-
         run: |
           python OnshapeToSheets2026Gamma.py
