@@ -1,36 +1,32 @@
 #!/usr/bin/env python3
 """
-Sync an Onshape Assembly BOM to a Google Sheet (overwrite worksheet with filtered BOM).
+Onshape BOM -> Google Sheets (filters by partNumber prefixes)
 
-Designed for GitHub Actions:
-- Reads all secrets from environment variables (no files committed).
-- Writes Google service account JSON from env (no cred.json needed).
-- Fetches BOM from Onshape, filters rows, normalizes fields, uploads to Google Sheets.
+Fixes:
+- Google Sheets cannot accept dict/list values. This script stringifies any dict/list cells.
+- itemSource sometimes arrives as a dict; we convert it to itemSourceHref if present.
 
-ENV VARS REQUIRED:
-  ONSHAPE_ACCESS_KEY
-  ONSHAPE_SECRET_KEY
-  ONSHAPE_BASE_URL              (optional, default: https://frc190.onshape.com)
-  ONSHAPE_DOCUMENT_ID
-  ONSHAPE_WORKSPACE_ID
-  ONSHAPE_ASSEMBLY_ID
+ENV (.env example):
 
-  GOOGLE_SERVICE_ACCOUNT_JSON   (full JSON string)
-  GOOGLE_SHEET_NAME             (e.g. "2025GammaBOM")
-  GOOGLE_WORKSHEET_NAME         (e.g. "Sheet1")
+ONSHAPE_ACCESS_KEY=...
+ONSHAPE_SECRET_KEY=...
+ONSHAPE_DOC_URL=https://frc190.onshape.com/documents/<did>/w/<wid>/e/<eid>
 
-OPTIONAL FILTERING / OUTPUT:
-  PARTNUMBER_PREFIX             (default: P-25)
-  INCLUDE_COLUMNS               (comma-separated, default below)
+GOOGLE_SERVICE_ACCOUNT_FILE=cred.json
+GOOGLE_SHEET_NAME=2026GammaBOM
+GOOGLE_WORKSHEET_NAME=Sheet1
+
+PARTNUMBER_PREFIXES=P-190A-26,WCP-,912,TTB-,SDS
 """
 
 import os
-import sys
+import re
 import json
-import time
-import hmac
 import base64
+import hmac
 import hashlib
+from dataclasses import dataclass
+from datetime import datetime, timezone
 from urllib.parse import urlparse, urlencode
 
 import requests
@@ -38,67 +34,124 @@ import pandas as pd
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 
+try:
+    from dotenv import load_dotenv
+except ImportError:
+    load_dotenv = None
+
 
 DEFAULT_COLUMNS = [
+    "key",
+    "item",
+    "quantity",
+    "partNumber",
     "name",
     "description",
-    "vendor",
-    "partNumber",
     "material",
-    "quantity",
-    "revision",
     "manufacturingmethod",
+    "vendor",
+    "revision",
+    "state",
+    "category",
+    "frcbombommaterial",
+    "frcbompreprocess",
+    "frcbomprocess1",
+    "frcbomprocess2",
+    # Instead of raw itemSource (can be dict), we write a safe string column:
+    "itemSource",
 ]
+
+
+@dataclass
+class OnshapeTarget:
+    base_url: str
+    did: str
+    wvm_type: str
+    wvm_id: str
+    eid: str
 
 
 def require_env(name: str) -> str:
     v = os.environ.get(name)
-    if not v:
+    if v is None or v == "":
         raise RuntimeError(f"Missing required environment variable: {name}")
     return v
 
 
-def create_onshape_headers(method: str, url: str, query_string: str = "", body: str = "") -> dict:
-    """
-    Generate signed headers for Onshape API.
+def parse_onshape_doc_url(doc_url: str) -> OnshapeTarget:
+    u = urlparse(doc_url.strip())
+    if not u.scheme or not u.netloc:
+        raise ValueError("Please provide a full URL starting with https://...")
 
-    NOTE: This matches the user's currently-working approach (nonce/date as ms timestamp).
-    If you later want the "official" HTTP Date signing scheme, this function is where to change it.
-    """
+    base_url = f"{u.scheme}://{u.netloc}"
+    path = u.path
+
+    m = re.search(r"/documents/([a-fA-F0-9]+)/([wvm])/([a-fA-F0-9]+)/e/([a-fA-F0-9]+)", path)
+    if not m:
+        raise ValueError(
+            "Could not parse URL.\n"
+            "Expected: https://<domain>/documents/<did>/w|v|m/<id>/e/<eid>"
+        )
+
+    did, wvm_type, wvm_id, eid = m.group(1), m.group(2), m.group(3), m.group(4)
+    return OnshapeTarget(base_url=base_url, did=did, wvm_type=wvm_type, wvm_id=wvm_id, eid=eid)
+
+
+def _rfc1123_gmt_now() -> str:
+    return datetime.now(timezone.utc).strftime("%a, %d %b %Y %H:%M:%S GMT")
+
+
+def _nonce_hex(nbytes: int = 16) -> str:
+    return os.urandom(nbytes).hex()
+
+
+def onshape_headers_official(method: str, full_url: str, content_type: str = "application/json") -> dict:
     access_key = require_env("ONSHAPE_ACCESS_KEY")
     secret_key = require_env("ONSHAPE_SECRET_KEY")
 
-    current_time_ms = str(int(time.time() * 1000))  # used as nonce + date in this scheme
-    url_parts = urlparse(url)
-    request_path = url_parts.path
-    if query_string:
-        request_path += "?" + query_string
+    u = urlparse(full_url)
+    path = u.path
+    query = u.query or ""
 
-    prehash_string = (method + "\n" + current_time_ms + "\n" + request_path + "\n" + body).lower()
-    signature = hmac.new(
-        secret_key.encode("utf-8"),
-        prehash_string.encode("utf-8"),
-        hashlib.sha256
-    ).digest()
-    signature_b64 = base64.b64encode(signature).decode("utf-8")
+    date = _rfc1123_gmt_now()
+    nonce = _nonce_hex(16)
+
+    string_to_sign = (
+        f"{method}\n"
+        f"{nonce}\n"
+        f"{date}\n"
+        f"{content_type}\n"
+        f"{path}\n"
+        f"{query}\n"
+    ).lower()
+
+    sig = hmac.new(secret_key.encode("utf-8"), string_to_sign.encode("utf-8"), hashlib.sha256).digest()
+    sig_b64 = base64.b64encode(sig).decode("utf-8")
 
     return {
-        "Authorization": f"On {access_key}:HmacSHA256:{signature_b64}",
-        "On-Nonce": current_time_ms,
-        "Date": current_time_ms,
-        "Content-Type": "application/json",
+        "Authorization": f"On {access_key}:HmacSHA256:{sig_b64}",
+        "Date": date,
+        "On-Nonce": nonce,
+        "Content-Type": content_type,
         "Accept": "application/json",
     }
 
 
-def fetch_bom() -> dict:
-    base_url = os.environ.get("ONSHAPE_BASE_URL", "https://frc190.onshape.com").rstrip("/")
-    did = require_env("ONSHAPE_DOCUMENT_ID")
-    wid = require_env("ONSHAPE_WORKSPACE_ID")
-    eid = require_env("ONSHAPE_ASSEMBLY_ID")
+def test_doc_access(target: OnshapeTarget) -> None:
+    url = f"{target.base_url}/api/documents/{target.did}"
+    headers = onshape_headers_official("GET", url)
+    r = requests.get(url, headers=headers, timeout=30)
+    print(f"[INFO] Doc access test: {r.status_code}")
+    if r.status_code != 200:
+        try:
+            print(r.json())
+        except Exception:
+            print(r.text[:2000])
+        raise RuntimeError("Doc access test failed. Fix permissions/domain.")
 
-    endpoint = f"{base_url}/api/assemblies/d/{did}/w/{wid}/e/{eid}/bom"
 
+def fetch_bom(target: OnshapeTarget) -> dict:
+    endpoint = f"{target.base_url}/api/assemblies/d/{target.did}/{target.wvm_type}/{target.wvm_id}/e/{target.eid}/bom"
     params = {
         "indented": "false",
         "multiLevel": "false",
@@ -107,66 +160,63 @@ def fetch_bom() -> dict:
         "includeTopLevelAssemblyRow": "false",
         "thumbnail": "false",
     }
-    query_string = urlencode(params)
-    url = f"{endpoint}?{query_string}"
+    url = f"{endpoint}?{urlencode(params)}"
+    headers = onshape_headers_official("GET", url)
+    r = requests.get(url, headers=headers, timeout=60)
 
-    headers = create_onshape_headers("GET", endpoint, query_string=query_string, body="")
-    resp = requests.get(url, headers=headers, timeout=60)
-
-    if resp.status_code != 200:
-        # Show useful debugging info in GitHub Actions logs
-        print(f"[ERROR] Onshape BOM fetch failed: {resp.status_code}")
+    if r.status_code != 200:
+        print(f"[ERROR] BOM fetch failed: {r.status_code}")
         try:
-            print(resp.json())
+            print(r.json())
         except Exception:
-            print(resp.text[:2000])
-        raise RuntimeError(f"Onshape request failed with HTTP {resp.status_code}")
+            print(r.text[:2000])
+        raise RuntimeError(f"Onshape BOM fetch failed with HTTP {r.status_code}")
 
-    return resp.json()
+    return r.json()
 
 
 def extract_items(bom_json: dict) -> list[dict]:
-    """
-    Attempt to pull the BOM line items from common Onshape BOM response structures.
-    Your original code used: data['bomTable']['items'].
-    """
-    if isinstance(bom_json, dict):
-        if "bomTable" in bom_json and isinstance(bom_json["bomTable"], dict):
-            items = bom_json["bomTable"].get("items")
-            if isinstance(items, list):
-                return items
-
-        # Fallback guesses (in case schema differs)
-        for k in ("items", "rows", "bomItems", "bomRows"):
-            v = bom_json.get(k)
-            if isinstance(v, list):
-                return v
-
-    raise RuntimeError("Could not locate BOM items array in response JSON (unexpected schema).")
+    if isinstance(bom_json, dict) and "bomTable" in bom_json and isinstance(bom_json["bomTable"], dict):
+        items = bom_json["bomTable"].get("items")
+        if isinstance(items, list):
+            return items
+    for k in ("items", "rows", "bomItems", "bomRows"):
+        v = bom_json.get(k) if isinstance(bom_json, dict) else None
+        if isinstance(v, list):
+            return v
+    raise RuntimeError("Unexpected BOM schema: could not find items array.")
 
 
-def normalize_items(items: list[dict], part_prefix: str) -> list[dict]:
-    """
-    - Filter by partNumber prefix
-    - Normalize material: if material is object with id, replace with that id
-    """
-    filtered = []
+def normalize_and_filter(items: list[dict], part_prefixes: list[str]) -> list[dict]:
+    prefixes = [p.strip() for p in part_prefixes if p and p.strip()]
+    out: list[dict] = []
+
     for it in items:
-        pn = it.get("partNumber")
-        if not pn or not isinstance(pn, str):
-            continue
-        if part_prefix and not pn.startswith(part_prefix):
+        pn = (it.get("partNumber") or "").strip()
+        if prefixes and not any(pn.startswith(p) for p in prefixes):
             continue
 
-        it2 = dict(it)  # shallow copy
+        it2 = dict(it)
 
+        # normalize material dict to id if present
         mat = it2.get("material")
         if isinstance(mat, dict) and "id" in mat:
             it2["material"] = mat["id"]
 
-        filtered.append(it2)
+        # itemSource sometimes is dict -> keep a useful href if possible
+        src = it2.get("itemSource")
+        if isinstance(src, dict):
+            it2["itemSource"] = src.get("viewHref") or json.dumps(src, ensure_ascii=False)
+        elif isinstance(src, list):
+            it2["itemSource"] = json.dumps(src, ensure_ascii=False)
 
-    return filtered
+        # stable key
+        nm = (it2.get("name") or "").strip()
+        it2["key"] = pn if pn else nm
+
+        out.append(it2)
+
+    return out
 
 
 def to_dataframe(items: list[dict], columns: list[str]) -> pd.DataFrame:
@@ -175,72 +225,114 @@ def to_dataframe(items: list[dict], columns: list[str]) -> pd.DataFrame:
 
     df = pd.DataFrame(items)
 
-    # Ensure all expected columns exist
     for c in columns:
         if c not in df.columns:
             df[c] = ""
 
-    # Order columns
-    df = df.loc[:, columns]
-
-    # Replace NaN with empty string for Sheets
-    df = df.fillna("")
+    df = df.loc[:, columns].fillna("")
     return df
+
+
+def stringify_complex_cells(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Google Sheets rejects dict/list cells. Convert any dict/list values into JSON strings.
+    """
+    def coerce(v):
+        if isinstance(v, (dict, list)):
+            return json.dumps(v, ensure_ascii=False)
+        return v
+
+    for col in df.columns:
+        df[col] = df[col].map(coerce)
+
+    # Ensure everything is a plain Python scalar or string
+    return df.astype(str)
+
+
+def load_service_account_json() -> dict:
+    sa_file = (os.environ.get("GOOGLE_SERVICE_ACCOUNT_FILE") or "").strip()
+    if sa_file:
+        with open(sa_file, "r", encoding="utf-8") as f:
+            return json.load(f)
+
+    sa_inline = (os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON") or "").strip()
+    if sa_inline:
+        return json.loads(sa_inline)
+
+    raise RuntimeError("Set GOOGLE_SERVICE_ACCOUNT_FILE (local) or GOOGLE_SERVICE_ACCOUNT_JSON (Actions).")
 
 
 def write_to_google_sheet(df: pd.DataFrame) -> None:
     sheet_name = require_env("GOOGLE_SHEET_NAME")
     worksheet_name = require_env("GOOGLE_WORKSHEET_NAME")
-    sa_json_str = require_env("GOOGLE_SERVICE_ACCOUNT_JSON")
+
+    sa_json = load_service_account_json()
 
     scope = [
         "https://spreadsheets.google.com/feeds",
         "https://www.googleapis.com/auth/drive",
     ]
-    sa_dict = json.loads(sa_json_str)
-    creds = ServiceAccountCredentials.from_json_keyfile_dict(sa_dict, scope)
+    creds = ServiceAccountCredentials.from_json_keyfile_dict(sa_json, scope)
     client = gspread.authorize(creds)
 
     sheet = client.open(sheet_name)
     ws = sheet.worksheet(worksheet_name)
 
-    # Prepare values (header + rows)
     values = [df.columns.values.tolist()] + df.values.tolist()
 
-    # Clear & update in one shot
     ws.clear()
     ws.update(values)
 
-    print(f"[OK] Wrote {max(len(values) - 1, 0)} rows to Google Sheet '{sheet_name}' / '{worksheet_name}'")
+    print(f"[OK] Wrote {max(len(values)-1, 0)} rows to '{sheet_name}' / '{worksheet_name}'")
 
 
 def main() -> int:
-    part_prefix = os.environ.get("PARTNUMBER_PREFIX", "P-25").strip()
-    cols_env = os.environ.get("INCLUDE_COLUMNS", "")
-    columns = [c.strip() for c in cols_env.split(",") if c.strip()] if cols_env else DEFAULT_COLUMNS
+    if load_dotenv is not None and os.path.exists(".env"):
+        load_dotenv(".env")
 
-    print("[INFO] Fetching BOM from Onshape...")
-    bom = fetch_bom()
+    doc_url = (os.environ.get("ONSHAPE_DOC_URL") or "").strip()
+    if not doc_url:
+        doc_url = input("Paste Onshape document URL (assembly tab URL): ").strip()
+
+    prefixes_env = (os.environ.get("PARTNUMBER_PREFIXES") or "").strip()
+    part_prefixes = [p.strip() for p in prefixes_env.split(",") if p.strip()] if prefixes_env else []
+
+    columns_env = (os.environ.get("INCLUDE_COLUMNS") or "").strip()
+    columns = [c.strip() for c in columns_env.split(",") if c.strip()] if columns_env else DEFAULT_COLUMNS
+
+    target = parse_onshape_doc_url(doc_url)
+    print("[INFO] Parsed target:")
+    print(f"  did:      {target.did}")
+    print(f"  {target.wvm_type} id:   {target.wvm_id}")
+    print(f"  eid:      {target.eid}")
+
+    print("[INFO] Testing document access...")
+    test_doc_access(target)
+
+    print("[INFO] Fetching BOM...")
+    bom = fetch_bom(target)
 
     print("[INFO] Extracting BOM items...")
     items = extract_items(bom)
+    print(f"[INFO] Total BOM rows returned: {len(items)}")
 
-    print(f"[INFO] Normalizing + filtering items (prefix='{part_prefix}')...")
-    filtered = normalize_items(items, part_prefix=part_prefix)
-    print(f"[INFO] Items after filter: {len(filtered)}")
+    print(f"[INFO] Filtering by partNumber prefixes: {part_prefixes if part_prefixes else '(none -> keep all)'}")
+    filtered = normalize_and_filter(items, part_prefixes=part_prefixes)
+    print(f"[INFO] Rows after filter: {len(filtered)}")
 
-    df = to_dataframe(filtered, columns=columns)
+    df = to_dataframe(filtered, columns)
 
-    # Log a small preview
-    if len(df) > 0:
-        print("[INFO] Preview (first 5 rows):")
-        print(df.head(5).to_string(index=False))
+    # IMPORTANT: make Sheets-safe
+    df = stringify_complex_cells(df)
+
+    if not df.empty:
+        print("[INFO] Preview (first 10 rows):")
+        print(df.head(10).to_string(index=False))
     else:
-        print("[WARN] No rows after filtering; sheet will be overwritten with just headers.")
+        print("[WARN] No rows after filtering; sheet will be overwritten with headers only.")
 
     print("[INFO] Writing to Google Sheets...")
     write_to_google_sheet(df)
-
     return 0
 
 
