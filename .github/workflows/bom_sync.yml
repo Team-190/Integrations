@@ -3,7 +3,7 @@ name: Sync Onshape BOM to Google Sheets
 on:
   workflow_dispatch: {}
   schedule:
-    - cron: "*/15 * * * *" # every 15 mins (UTC)
+    - cron: "* * * * *"
 
 jobs:
   sync:
