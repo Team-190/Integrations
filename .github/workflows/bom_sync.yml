@@ -28,7 +28,6 @@ jobs:
         env:
           ONSHAPE_ACCESS_KEY: ${{ secrets.ONSHAPE_ACCESS_KEY }}
           ONSHAPE_SECRET_KEY: ${{ secrets.ONSHAPE_SECRET_KEY }}
-          ONSHAPE_BASE_URL: ${{ secrets.ONSHAPE_BASE_URL }}
           ONSHAPE_DOCUMENT_ID: ${{ secrets.ONSHAPE_DOCUMENT_ID }}
           ONSHAPE_WORKSPACE_ID: ${{ secrets.ONSHAPE_WORKSPACE_ID }}
           ONSHAPE_ASSEMBLY_ID: ${{ secrets.ONSHAPE_ASSEMBLY_ID }}
