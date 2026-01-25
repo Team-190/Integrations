@@ -32,6 +32,7 @@ jobs:
           ONSHAPE_DOCUMENT_ID: ${{ secrets.ONSHAPE_DOCUMENT_ID }}
           ONSHAPE_WORKSPACE_ID: ${{ secrets.ONSHAPE_WORKSPACE_ID }}
           ONSHAPE_ASSEMBLY_ID: ${{ secrets.ONSHAPE_ASSEMBLY_ID }}
+          ONSHAPE_BASE_URL: "https://frc190.onshape.com"
 
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
           GOOGLE_SHEET_NAME: "2026GammaBOM"
