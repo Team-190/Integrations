@@ -1,0 +1,22 @@
+name: Debug schedule / show event
+on:
+  schedule:
+    - cron: '*/5 * * * *'   # every 5 minutes
+  workflow_dispatch:
+
+jobs:
+  debug:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Show event info
+        run: |
+          echo "EVENT: $GITHUB_EVENT_NAME"
+          echo "REF: $GITHUB_REF"
+          echo "REPOSITORY: $GITHUB_REPOSITORY"
+          echo "SHA: $GITHUB_SHA"
+          # Save the event payload for inspection
+          mkdir -p /tmp/event
+          jq . "$GITHUB_EVENT_PATH" > /tmp/event/event.json || true
+          ls -la /tmp/event
+      - name: Print last 100 lines of actions log (dummy)
+        run: echo "debug complete"
