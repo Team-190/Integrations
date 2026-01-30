@@ -2,9 +2,11 @@
 """
 Onshape BOM -> Google Sheets (filters by partNumber prefixes)
 
-Fixes:
-- Google Sheets cannot accept dict/list values. This script stringifies any dict/list cells.
-- itemSource sometimes arrives as a dict; we convert it to itemSourceHref if present.
+Updates (new changes):
+- Adds assemblyNumber based on BOM hierarchy using itemSource.indentLevel stack
+  (NOT the "item" field, which is not hierarchical in the API output you're using).
+- Keeps Google Sheets-safe stringification for dict/list cells.
+- itemSource is converted to a usable viewHref string.
 
 ENV (.env example):
 
@@ -12,7 +14,9 @@ ONSHAPE_ACCESS_KEY=...
 ONSHAPE_SECRET_KEY=...
 ONSHAPE_DOC_URL=https://frc190.onshape.com/documents/<did>/w/<wid>/e/<eid>
 
-GOOGLE_SERVICE_ACCOUNT_FILE=cred.json
+GOOGLE_SERVICE_ACCOUNT_FILE=cred.json          # local
+# or GOOGLE_SERVICE_ACCOUNT_JSON='{"type": ...}'  # Actions
+
 GOOGLE_SHEET_NAME=2026GammaBOM
 GOOGLE_WORKSHEET_NAME=Sheet1
 
@@ -45,6 +49,7 @@ DEFAULT_COLUMNS = [
     "item",
     "quantity",
     "partNumber",
+    "assemblyNumber",
     "name",
     "description",
     "material",
@@ -53,12 +58,7 @@ DEFAULT_COLUMNS = [
     "revision",
     "state",
     "category",
-    "frcbombommaterial",
-    "frcbompreprocess",
-    "frcbomprocess1",
-    "frcbomprocess2",
-    # Instead of raw itemSource (can be dict), we write a safe string column:
-    "itemSource",
+    "itemSource",  # safe string (viewHref if available)
 ]
 
 
@@ -106,6 +106,10 @@ def _nonce_hex(nbytes: int = 16) -> str:
 
 
 def onshape_headers_official(method: str, full_url: str, content_type: str = "application/json") -> dict:
+    """
+    NOTE: This matches the "string_to_sign" scheme you were already using.
+    Keep it stable since your doc access + BOM fetch works with it.
+    """
     access_key = require_env("ONSHAPE_ACCESS_KEY")
     secret_key = require_env("ONSHAPE_SECRET_KEY")
 
@@ -153,8 +157,8 @@ def test_doc_access(target: OnshapeTarget) -> None:
 def fetch_bom(target: OnshapeTarget) -> dict:
     endpoint = f"{target.base_url}/api/assemblies/d/{target.did}/{target.wvm_type}/{target.wvm_id}/e/{target.eid}/bom"
     params = {
-        "indented": "false",
-        "multiLevel": "false",
+        "indented": "true",
+        "multiLevel": "true",
         "generateIfAbsent": "false",
         "includeItemMicroversions": "false",
         "includeTopLevelAssemblyRow": "false",
@@ -187,21 +191,100 @@ def extract_items(bom_json: dict) -> list[dict]:
     raise RuntimeError("Unexpected BOM schema: could not find items array.")
 
 
+# ----------------------------
+# NEW: assembly context via indentLevel stack
+# ----------------------------
+
+ASSEMBLY_NAME_RE = re.compile(r"^A-[A-Za-z0-9-]+$")
+
+
+def get_indent_level(row: dict) -> int:
+    src = row.get("itemSource")
+    if isinstance(src, dict):
+        try:
+            return int(src.get("indentLevel", 0))
+        except Exception:
+            return 0
+    return 0
+
+
+def is_assembly_row(row: dict) -> bool:
+    """
+    In your BOM table, assembly rows look like:
+      item "2"  (in UI)
+      name "A-190A-260003"
+      partNumber empty
+    But note: we do NOT rely on the API "item" for hierarchy.
+    """
+    name = (row.get("name") or "").strip()
+    if not name or not ASSEMBLY_NAME_RE.match(name):
+        return False
+    pn = (row.get("partNumber") or "").strip()
+    # Usually blank; allow N/A too just in case
+    return pn == "" or pn.upper() == "N/A"
+
+
+def annotate_assembly_numbers(items: list[dict]) -> list[dict]:
+    """
+    Walk rows in order; maintain a stack based on indentLevel.
+    Whenever we see an assembly row (name is A-...), push it.
+    Every row inherits the nearest assemblyNumber from the stack.
+    """
+    out: list[dict] = []
+    stack: list[tuple[int, str]] = []  # (indentLevel, assemblyNumber)
+
+    for it in items:
+        it2 = dict(it)
+        lvl = get_indent_level(it2)
+        it2["indentLevel"] = lvl
+
+        # Pop to parent
+        while stack and stack[-1][0] >= lvl:
+            stack.pop()
+
+        # Push if assembly
+        if is_assembly_row(it2):
+            stack.append((lvl, (it2.get("name") or "").strip()))
+
+        it2["assemblyNumber"] = stack[-1][1] if stack else ""
+        out.append(it2)
+
+    return out
+
+
 def normalize_and_filter(items: list[dict], part_prefixes: list[str]) -> list[dict]:
     prefixes = [p.strip() for p in part_prefixes if p and p.strip()]
     out: list[dict] = []
 
     for it in items:
         pn = (it.get("partNumber") or "").strip()
-        if prefixes and not any(pn.startswith(p) for p in prefixes):
+        if prefixes and (not pn or not any(pn.startswith(p) for p in prefixes)):
             continue
 
         it2 = dict(it)
 
-        # normalize material dict to id if present
+        # normalize material dict to id/name if present
         mat = it2.get("material")
-        if isinstance(mat, dict) and "id" in mat:
-            it2["material"] = mat["id"]
+
+        # Case A: material comes as a dict/object
+        if isinstance(mat, dict):
+            display = (mat.get("displayName") or "").strip()
+            mid = (mat.get("id") or "").strip()
+
+            # If it's the "empty material object", treat as blank
+            if not display and not mid:
+                it2["material"] = ""
+            else:
+                # Prefer human-readable displayName, else id, else JSON
+                it2["material"] = display or mid or json.dumps(mat, ensure_ascii=False)
+
+        # Case B: material is already a scalar (string like "ebvfxJQZhriv0jLX")
+        elif isinstance(mat, str):
+            it2["material"] = mat.strip()
+
+        # Anything else -> stringify safely
+        else:
+            it2["material"] = "" if mat is None else str(mat)
 
         # itemSource sometimes is dict -> keep a useful href if possible
         src = it2.get("itemSource")
@@ -245,7 +328,6 @@ def stringify_complex_cells(df: pd.DataFrame) -> pd.DataFrame:
     for col in df.columns:
         df[col] = df[col].map(coerce)
 
-    # Ensure everything is a plain Python scalar or string
     return df.astype(str)
 
 
@@ -313,11 +395,14 @@ def main() -> int:
     bom = fetch_bom(target)
 
     print("[INFO] Extracting BOM items...")
-    items = extract_items(bom)
-    print(f"[INFO] Total BOM rows returned: {len(items)}")
+    items_raw = extract_items(bom)
+    print(f"[INFO] Total BOM rows returned: {len(items_raw)}")
+
+    # NEW: assign indentLevel + assemblyNumber based on hierarchy
+    items_annotated = annotate_assembly_numbers(items_raw)
 
     print(f"[INFO] Filtering by partNumber prefixes: {part_prefixes if part_prefixes else '(none -> keep all)'}")
-    filtered = normalize_and_filter(items, part_prefixes=part_prefixes)
+    filtered = normalize_and_filter(items_annotated, part_prefixes)
     print(f"[INFO] Rows after filter: {len(filtered)}")
 
     df = to_dataframe(filtered, columns)
