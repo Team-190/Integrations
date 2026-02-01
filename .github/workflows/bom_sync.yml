@@ -36,6 +36,6 @@ jobs:
           GOOGLE_SHEET_NAME: "2026GammaBOM"
           GOOGLE_WORKSHEET_NAME: "Sheet1"
 
-          PARTNUMBER_PREFIXES: "P-190A-26,WCP-,TTB-,SDS"
+          PARTNUMBER_PREFIXES: "P-190A-26"
         run: |
           python OnshapeToSheets2026Gamma.py
