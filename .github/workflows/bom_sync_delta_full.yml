@@ -1,4 +1,4 @@
-name: Sync Onshape Delta BOM to Google Sheets
+name: Sync Onshape Delta BOM to Google Sheets - Public Sheet
 
 on:
   workflow_dispatch: {}
@@ -33,9 +33,8 @@ jobs:
           ONSHAPE_DOC_URL: ${{ secrets.ONSHAPE_DOC_URL_DELTA }}
 
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
-          GOOGLE_SHEET_NAME: "2026DeltaBOM"
+          GOOGLE_SHEET_NAME: "2026DeltaPublicBOM"
           GOOGLE_WORKSHEET_NAME: "Sheet1"
-
-          PARTNUMBER_PREFIXES: "P-190B-26"
+  
         run: |
           python OnshapeToSheets2026Gamma.py
