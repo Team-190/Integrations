@@ -1,5 +1,3 @@
-# Team-190/CI-Workflows/.github/workflows/gompeilib/syncgompeilib.yaml
-
 name: Sync GompeiLib
 
 on:
@@ -12,7 +10,7 @@ on:
       branch_prefix:
         required: false
         type: string
-        default: "sync-gompeilib"
+        default: "gompeilib-sync"
 
 jobs:
   sync:
@@ -23,86 +21,80 @@ jobs:
       pull-requests: write
 
     steps:
-      # Identify Repo A automatically
-      - name: Set repo A
-        run: echo "REPO_A=${GITHUB_REPOSITORY}" >> $GITHUB_ENV
-
-      # Checkout Repo A (caller)
-      - name: Checkout Repo A
-        uses: actions/checkout@v4
-        with:
-          path: repoA
-
-      # Checkout GompeiLib (always fixed)
-      - name: Checkout GompeiLib
-        uses: actions/checkout@v4
-        with:
-          repository: Team-190/GompeiLib
-          path: gompeilib
-
-      # Sync logic (inferred)
-      - name: Sync files
+      # Identify repos based on direction
+      - name: Set source and target repos
         run: |
           if [ "${{ inputs.direction }}" = "pull" ]; then
-            echo "Pull: GompeiLib → Repo A"
-            rsync -av --delete gompeilib/ repoA/lib/
+            echo "SOURCE_REPO=Team-190/GompeiLib" >> $GITHUB_ENV
+            echo "TARGET_REPO=$GITHUB_REPOSITORY" >> $GITHUB_ENV
+            echo "SOURCE_PATH=gompeilib" >> $GITHUB_ENV
+            echo "TARGET_PATH=repoA" >> $GITHUB_ENV
           else
-            echo "Push: Repo A → GompeiLib"
-            rsync -av --delete repoA/lib/ gompeilib/
+            echo "SOURCE_REPO=$GITHUB_REPOSITORY" >> $GITHUB_ENV
+            echo "TARGET_REPO=Team-190/GompeiLib" >> $GITHUB_ENV
+            echo "SOURCE_PATH=repoA" >> $GITHUB_ENV
+            echo "TARGET_PATH=gompeilib" >> $GITHUB_ENV
           fi
 
-      # Commit in destination repo
-      - name: Commit changes
+      # Checkout SOURCE repo
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.SOURCE_REPO }}
+          path: ${{ env.SOURCE_PATH }}
+
+      # Checkout TARGET repo
+      - name: Checkout target
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.TARGET_REPO }}
+          path: ${{ env.TARGET_PATH }}
+
+      # Apply git-aware file transfer
+      - name: Stage changes (git-controlled diff)
         run: |
-          if [ "${{ inputs.direction }}" = "pull" ]; then
-            cd repoA
-            TARGET="repoA"
-          else
-            cd gompeilib
-            TARGET="gompeilib"
-          fi
+          rsync -a \
+            --exclude=".gradle/" \
+            --exclude="build/" \
+            --exclude=".git/" \
+            $SOURCE_PATH/lib/ $TARGET_PATH/lib/
 
-          git config user.name "github-actions"
-          git config user.email "github-actions@github.com"
+      # Create PR branch in TARGET repo
+      - name: Create branch and commit
+        run: |
+          cd $TARGET_PATH
 
           TIMESTAMP=$(date +"%Y%m%d-%H%M%S")
           BRANCH="${{ inputs.branch_prefix }}-$TIMESTAMP"
 
-          git checkout -b $BRANCH
-          git add .
-          git commit -m "GompeiLib sync (${{ inputs.direction }}) $TIMESTAMP" || echo "No changes"
-
           echo "BRANCH=$BRANCH" >> $GITHUB_ENV
-          echo "TARGET=$TARGET" >> $GITHUB_ENV
 
-      # Push branch
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+
+          git checkout -b "$BRANCH"
+
+          # CRITICAL: enables add + modify + delete tracking
+          git add -A lib/
+
+          git commit -m "GompeiLib bidirectional sync (${{ inputs.direction }}) $TIMESTAMP" || echo "No changes"
+
+      # Push PR branch
       - name: Push branch
         run: |
-          if [ "${{ inputs.direction }}" = "pull" ]; then
-            cd repoA
-          else
-            cd gompeilib
-          fi
-
-          git push origin $BRANCH
-
-      # Create PR in correct repo
-      - name: Create PR
-        run: |
-          if [ "${{ inputs.direction }}" = "pull" ]; then
-            gh pr create \
-              --repo $GITHUB_REPOSITORY \
-              --head $BRANCH \
-              --base main \
-              --title "Sync GompeiLib → Repo" \
-              --body "Automated pull from GompeiLib"
-          else
-            gh pr create \
-              --repo Team-190/GompeiLib \
-              --head $BRANCH \
-              --base main \
-              --title "Sync Repo → GompeiLib" \
-              --body "Automated push into GompeiLib"
-          fi
+          cd $TARGET_PATH
+          git push origin "$BRANCH"
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+
+      # Open PR in TARGET repo
+      - name: Create Pull Request
+        run: |
+          gh pr create \
+            --repo "$TARGET_REPO" \
+            --head "$BRANCH" \
+            --base main \
+            --title "GompeiLib sync (${{ inputs.direction }})" \
+            --body "Automated bidirectional sync between Repo A and GompeiLib"
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
