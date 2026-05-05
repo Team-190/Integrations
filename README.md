@@ -1,2 +1,2 @@
-# Integrations
-used for app integrations
+# CI-Workflows
+used for app integrations and general GitHub workflows
