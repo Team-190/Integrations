@@ -1,0 +1,106 @@
+name: Sync GompeiLib
+
+on:
+  workflow_call:
+    inputs:
+      direction:
+        required: true
+        type: string   # "pull" or "push"
+
+      branch_prefix:
+        required: false
+        type: string
+        default: "sync-gompeilib"
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      # Identify Repo A automatically
+      - name: Set repo A
+        run: echo "REPO_A=${GITHUB_REPOSITORY}" >> $GITHUB_ENV
+
+      # Checkout Repo A (caller)
+      - name: Checkout Repo A
+        uses: actions/checkout@v4
+        with:
+          path: repoA
+
+      # Checkout GompeiLib (always fixed)
+      - name: Checkout GompeiLib
+        uses: actions/checkout@v4
+        with:
+          repository: Team-190/GompeiLib
+          path: gompeilib
+
+      # Sync logic (inferred)
+      - name: Sync files
+        run: |
+          if [ "${{ inputs.direction }}" = "pull" ]; then
+            echo "Pull: GompeiLib → Repo A"
+            rsync -av --delete gompeilib/ repoA/lib/
+          else
+            echo "Push: Repo A → GompeiLib"
+            rsync -av --delete repoA/lib/ gompeilib/
+          fi
+
+      # Commit in destination repo
+      - name: Commit changes
+        run: |
+          if [ "${{ inputs.direction }}" = "pull" ]; then
+            cd repoA
+            TARGET="repoA"
+          else
+            cd gompeilib
+            TARGET="gompeilib"
+          fi
+
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+
+          TIMESTAMP=$(date +"%Y%m%d-%H%M%S")
+          BRANCH="${{ inputs.branch_prefix }}-$TIMESTAMP"
+
+          git checkout -b $BRANCH
+          git add .
+          git commit -m "GompeiLib sync (${{ inputs.direction }}) $TIMESTAMP" || echo "No changes"
+
+          echo "BRANCH=$BRANCH" >> $GITHUB_ENV
+          echo "TARGET=$TARGET" >> $GITHUB_ENV
+
+      # Push branch
+      - name: Push branch
+        run: |
+          if [ "${{ inputs.direction }}" = "pull" ]; then
+            cd repoA
+          else
+            cd gompeilib
+          fi
+
+          git push origin $BRANCH
+
+      # Create PR in correct repo
+      - name: Create PR
+        run: |
+          if [ "${{ inputs.direction }}" = "pull" ]; then
+            gh pr create \
+              --repo $GITHUB_REPOSITORY \
+              --head $BRANCH \
+              --base main \
+              --title "Sync GompeiLib → Repo" \
+              --body "Automated pull from GompeiLib"
+          else
+            gh pr create \
+              --repo Team-190/GompeiLib \
+              --head $BRANCH \
+              --base main \
+              --title "Sync Repo → GompeiLib" \
+              --body "Automated push into GompeiLib"
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
