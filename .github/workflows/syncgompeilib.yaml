@@ -93,29 +93,19 @@ jobs:
           git add -A
           git commit -m "GompeiLib sync (${{ inputs.direction }}) $TIMESTAMP" || echo "No changes"
 
-      - name: Push branch (clean auth reset)
+      - name: Setup SSH for GitHub
+        run: |
+          mkdir -p ~/.ssh
+          ssh-keyscan github.com >> ~/.ssh/known_hosts
+
+      - name: Push via SSH (reliable)
         run: |
           set -e
           cd "$TARGET_PATH"
 
-          echo "Resetting git auth state..."
-
-          git config --global --unset credential.helper || true
-          git config --global --unset-all credential.helper || true
-
-          echo "Setting authenticated remote..."
-
-          git remote set-url origin \
-            https://x-access-token:${GOMPEILIB_SYNC}@github.com/Team-190/GompeiLib.git
-
-          echo "Verifying remote:"
-          git remote -v
-
-          echo "Pushing branch: $BRANCH"
+          git remote set-url origin git@github.com:Team-190/GompeiLib.git
 
           git push origin "$BRANCH"
-        env:
-          GOMPEILIB_SYNC: ${{ secrets.GOMPEILIB_SYNC }}
 
       # Open PR in TARGET repo
       - name: Create Pull Request
