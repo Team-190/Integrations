@@ -96,8 +96,9 @@ jobs:
       - name: Push branch
         run: |
           set -e
-
           cd "$TARGET_PATH"
+
+          echo "TOKEN LENGTH: ${#GOMPEILIB_SYNC}"
 
           git push \
             "https://${GOMPEILIB_SYNC}@github.com/Team-190/GompeiLib.git" \
