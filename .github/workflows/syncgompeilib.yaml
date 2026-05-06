@@ -52,6 +52,8 @@ jobs:
         with:
           repository: ${{ env.TARGET_REPO }}
           path: ${{ env.TARGET_PATH }}
+          # THIS IS KEY: Prevents the default token from being saved in the local git config
+          persist-credentials: false
 
       # Sync files (correct architecture)
       - name: Sync files
