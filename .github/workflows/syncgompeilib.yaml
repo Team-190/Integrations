@@ -111,4 +111,4 @@ jobs:
             --title "GompeiLib sync (${{ inputs.direction }})" \
             --body "Automated bidirectional sync between Repo A and GompeiLib"
         env:
-          GH_TOKEN: ${{ secrets.GOMPEILIB_SYNC }}
+          GH_TOKEN: ${{ github.token }}
