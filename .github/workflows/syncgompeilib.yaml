@@ -98,14 +98,18 @@ jobs:
           mkdir -p ~/.ssh
           ssh-keyscan github.com >> ~/.ssh/known_hosts
 
-      - name: Push via SSH (reliable)
+      - name: Push branch (correct + stable)
         run: |
           set -e
           cd "$TARGET_PATH"
 
-          git remote set-url origin git@github.com:Team-190/GompeiLib.git
+          git config --global credential.helper store
+
+          echo "https://x-access-token:${GOMPEILIB_SYNC}@github.com" > ~/.git-credentials
 
           git push origin "$BRANCH"
+        env:
+          GOMPEILIB_SYNC: ${{ secrets.GOMPEILIB_SYNC }}
 
       # Open PR in TARGET repo
       - name: Create Pull Request
