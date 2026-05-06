@@ -2,6 +2,8 @@ name: Sync GompeiLib
 
 on:
   workflow_call:
+    secrets:
+      GOMPEILIB_SYNC: ${{ secrets.GOMPEILIB_SYNC }}
     inputs:
       direction:
         required: true
