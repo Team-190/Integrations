@@ -94,11 +94,20 @@ jobs:
           git commit -m "GompeiLib sync (${{ inputs.direction }}) $TIMESTAMP" || echo "No changes"
 
       # Push PR branch
-      - name: Push branch
+      - name: Push branch (PAT-authenticated)
         run: |
-          cd $TARGET_PATH
+          set -e
 
-          git remote set-url origin https://x-access-token:${GOMPEILIB_SYNC}@github.com/Team-190/GompeiLib.git
+          cd "$TARGET_PATH"
+
+          echo "Configuring authenticated remote..."
+
+          git remote set-url origin "https://x-access-token:${GOMPEILIB_SYNC}@github.com/Team-190/GompeiLib.git"
+
+          echo "Verifying remote:"
+          git remote -v
+
+          echo "Pushing branch: $BRANCH"
 
           git push origin "$BRANCH"
         env:
