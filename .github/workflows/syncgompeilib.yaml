@@ -93,15 +93,17 @@ jobs:
           git add -A
           git commit -m "GompeiLib sync (${{ inputs.direction }}) $TIMESTAMP" || echo "No changes"
 
-      - name: Push branch
+      - name: Push branch (bulletproof)
         run: |
           set -e
+
           cd "$TARGET_PATH"
 
-          echo "Pushing branch directly with PAT..."
+          echo "Branch: $BRANCH"
+          echo "Target repo: Team-190/GompeiLib"
 
           git push \
-            https://x-access-token:${GOMPEILIB_SYNC}@github.com/Team-190/GompeiLib.git \
+            "https://x-access-token:${GOMPEILIB_SYNC}@github.com/Team-190/GompeiLib.git" \
             "$BRANCH"
         env:
           GOMPEILIB_SYNC: ${{ secrets.GOMPEILIB_SYNC }}
