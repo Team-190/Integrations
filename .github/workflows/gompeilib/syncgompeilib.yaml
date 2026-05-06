@@ -83,9 +83,12 @@ jobs:
       - name: Push branch
         run: |
           cd $TARGET_PATH
+
+          git remote set-url origin https://x-access-token:${GOMPEILIB_SYNC}@github.com/$TARGET_REPO.git
+
           git push origin "$BRANCH"
         env:
-          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          GOMPEILIB_SYNC: ${{ secrets.GOMPEILIB_SYNC }}
 
       # Open PR in TARGET repo
       - name: Create Pull Request
@@ -97,4 +100,4 @@ jobs:
             --title "GompeiLib sync (${{ inputs.direction }})" \
             --body "Automated bidirectional sync between Repo A and GompeiLib"
         env:
-          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          GH_TOKEN: ${{ secrets.GOMPEILIB_SYNC }}
