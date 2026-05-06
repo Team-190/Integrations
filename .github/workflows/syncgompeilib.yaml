@@ -97,10 +97,15 @@ jobs:
         run: |
           echo "${GOMPEILIB_SYNC}" | gh auth login --with-token
 
+      - name: Link GitHub CLI auth to git
+        run: gh auth setup-git
+
       - name: Push branch
         run: |
+          set -e
           cd "$TARGET_PATH"
 
+          echo "Pushing branch: $BRANCH"
           git push origin "$BRANCH"
 
       - name: Create PR
