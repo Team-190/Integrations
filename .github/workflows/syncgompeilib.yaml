@@ -50,14 +50,27 @@ jobs:
           repository: ${{ env.TARGET_REPO }}
           path: ${{ env.TARGET_PATH }}
 
-      # Apply git-aware file transfer
-      - name: Stage changes (git-controlled diff)
+      # Sync files (correct architecture)
+      - name: Sync files
         run: |
-          rsync -a \
-            --exclude=".gradle/" \
-            --exclude="build/" \
-            --exclude=".git/" \
-            $SOURCE_PATH/lib/ $TARGET_PATH/lib/
+          if [ "${{ inputs.direction }}" = "pull" ]; then
+            echo "Pull: GompeiLib → Repo A/lib"
+
+            rsync -a --delete \
+              --exclude=".gradle/" \
+              --exclude="build/" \
+              --exclude=".git/" \
+              $SOURCE_PATH/ $TARGET_PATH/lib/
+
+          else
+            echo "Push: Repo A/lib → GompeiLib"
+
+            rsync -a --delete \
+              --exclude=".gradle/" \
+              --exclude="build/" \
+              --exclude=".git/" \
+              $SOURCE_PATH/lib/ $TARGET_PATH/
+          fi
 
       # Create PR branch in TARGET repo
       - name: Create branch and commit
@@ -74,10 +87,8 @@ jobs:
 
           git checkout -b "$BRANCH"
 
-          # CRITICAL: enables add + modify + delete tracking
-          git add -A lib/
-
-          git commit -m "GompeiLib bidirectional sync (${{ inputs.direction }}) $TIMESTAMP" || echo "No changes"
+          git add -A
+          git commit -m "GompeiLib sync (${{ inputs.direction }}) $TIMESTAMP" || echo "No changes"
 
       # Push PR branch
       - name: Push branch
